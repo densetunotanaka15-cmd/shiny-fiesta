@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>本格将棋 - 振り駒・対局アプリ</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@900&display=swap');
+        body { background-color: #e7e5e4; }
+        .shogi-font { font-family: 'Hiragino Mincho ProN', 'MS PMincho', 'serif'; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useCallback, useMemo, useEffect } = React;
+
+        // --- Constants ---
+        const SENTE = 0; 
+        const GOTE = 1;  
+        const PIECE_TYPES = {
+            FU: 'FU', KY: 'KY', KE: 'KE', GI: 'GI', KI: 'KI', KA: 'KA', HI: 'HI', OU: 'OU',
+            TO: 'TO', NY: 'NY', NK: 'NK', NG: 'NG', UM: 'UM', RY: 'RY',
+        };
+        const PIECE_DISPLAY = {
+            FU: { name: '歩', isProm: false }, KY: { name: '香', isProm: false }, KE: { name: '桂', isProm: false },
+            GI: { name: '銀', isProm: false }, KI: { name: '金', isProm: false }, KA: { name: '角', isProm: false },
+            HI: { name: '飛', isProm: false }, OU: { name: '玉', isProm: false }, TO: { name: 'と', isProm: true },
+            NY: { name: '杏', isProm: true }, NK: { name: '圭', isProm: true }, NG: { name: '全', isProm: true },
+            UM: { name: '馬', isProm: true }, RY: { name: '龍', isProm: true },
+        };
+        const PROMOTIONS = { FU: 'TO', KY: 'NY', KE: 'NK', GI: 'NG', KA: 'UM', HI: 'RY' };
+
+        // --- Icons (Customized for single file) ---
+        const Icon = ({ name, className }) => {
+            return <i data-lucide={name} className={className}></i>;
+        };
+
+        // --- Components ---
+        const ShogiPiece = ({ type, owner, isSelected }) => {
+            const info = PIECE_DISPLAY[type];
+            return (
+                <div className={`relative w-full h-full flex items-center justify-center transition-transform ${owner === GOTE ? 'rotate-180' : ''} ${isSelected ? 'scale-110' : ''}`}>
+                    <svg viewBox="0 0 100 115" className="w-[85%] h-[85%] drop-shadow-md">
+                        <path d="M50 5 L90 25 L85 105 L15 105 L10 25 Z" fill="#f3d19e" stroke="#4a3721" strokeWidth="3"/>
+                        <text x="50" y="75" textAnchor="middle" fontSize="50" fontWeight="900" className="shogi-font" fill={info.isProm ? "#d63031" : "#1a1a1a"}>
+                            {info.name}
+                        </text>
+                    </svg>
+                </div>
+            );
+        };
+
+        const createInitialBoard = () => {
+            const b = Array(9).fill(null).map(() => Array(9).fill(null));
+            const setR = (r, o, ps) => ps.forEach((t, c) => { if(t) b[r][c] = {type: t, owner: o}; });
+            setR(0, GOTE, ['KY','KE','GI','KI','OU','KI','GI','KE','KY']);
+            b[1][1] = {type:'HI', owner:GOTE}; b[1][7] = {type:'KA', owner:GOTE};
+            setR(2, GOTE, Array(9).fill('FU'));
+            setR(8, SENTE, ['KY','KE','GI','KI','OU','KI','GI','KE','KY']);
+            b[7][7] = {type:'HI', owner:SENTE}; b[7][1] = {type:'KA', owner:SENTE};
+            setR(6, SENTE, Array(9).fill('FU'));
+            return b;
+        };
+
+        // Simplified Movement Logic (See previous version for full logic, here condensed for build)
+        const getValidMoves = (board, r, c) => {
+            const piece = board[r][c];
+            if (!piece) return [];
+            const moves = [];
+            const dir = piece.owner === SENTE ? -1 : 1;
+            const add = (nr, nc) => {
+                if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+                    if (!board[nr][nc] || board[nr][nc].owner !== piece.owner) {
+                        moves.push({ r: nr, c: nc });
+                        return !board[nr][nc];
+                    }
+                }
+                return false;
+            };
+            const jump = (dr, dc) => { let nr = r+dr, nc = c+dc; while(add(nr, nc)){ nr+=dr; nc+=dc; } };
+            
+            const pt = piece.type;
+            if(pt==='FU') add(r+dir, c);
+            else if(pt==='KY') jump(dir, 0);
+            else if(pt==='KE'){ add(r+dir*2, c-1); add(r+dir*2, c+1); }
+            else if(pt==='GI') [dir,dir,dir,-dir,-dir].forEach((dr,i)=>add(r+dr, c+[-1,0,1,-1,1][i]));
+            else if(['KI','TO','NY','NK','NG'].includes(pt)) [dir,dir,dir,0,0,-dir].forEach((dr,i)=>add(r+dr, c+[-1,0,1,-1,1,0][i]));
+            else if(pt==='KA' || pt==='UM') { [1,1,-1,-1].forEach((dr,i)=>jump(dr, [1,-1,1,-1][i])); if(pt==='UM')[1,-1,0,0].forEach((dr,i)=>add(r+dr, c+[0,0,1,-1][i])); }
+            else if(pt==='HI' || pt==='RY') { [1,-1,0,0].forEach((dr,i)=>jump(dr, [0,0,1,-1][i])); if(pt==='RY')[1,1,-1,-1].forEach((dr,i)=>add(r+dr, c+[1,-1,1,-1][i])); }
+            else if(pt==='OU') [-1,-1,-1,0,0,1,1,1].forEach((dr,i)=>add(r+dr, c+[-1,0,1,-1,1,-1,0,1][i]));
+            return moves;
+        };
+
+        const getHandMoves = (board, type, owner) => {
+            const moves = [];
+            for(let r=0; r<9; r++) {
+                for(let c=0; c<9; c++) {
+                    if(!board[r][c]) {
+                        if(type==='FU') {
+                            let hasFu = false;
+                            for(let i=0; i<9; i++) if(board[i][c]?.type==='FU' && board[i][c]?.owner===owner) hasFu=true;
+                            if(hasFu) continue;
+                        }
+                        if((owner===SENTE && (r===0 && (type==='FU'||type==='KY') || (r<=1 && type==='KE'))) || 
+                           (owner===GOTE && (r===8 && (type==='FU'||type==='KY') || (r>=7 && type==='KE')))) continue;
+                        moves.push({r, c});
+                    }
+                }
+            }
+            return moves;
+        };
+
+        function App() {
+            const [board, setBoard] = useState(createInitialBoard());
+            const [hands, setHands] = useState([{FU:0,KY:0,KE:0,GI:0,KI:0,KA:0,HI:0},{FU:0,KY:0,KE:0,GI:0,KI:0,KA:0,HI:0}]);
+            const [turn, setTurn] = useState(SENTE);
+            const [selected, setSelected] = useState(null);
+            const [isFlipped, setIsFlipped] = useState(false);
+            const [gameState, setGameState] = useState('deciding');
+            const [results, setResults] = useState([]);
+            const [promotion, setPromotion] = useState(null);
+            const [gameOver, setGameOver] = useState(null);
+
+            useEffect(() => {
+                if(gameState === 'deciding') {
+                    const res = Array(5).fill(0).map(()=>Math.random()>0.5);
+                    setResults(res);
+                    setTimeout(() => setGameState('ready'), 1500);
+                }
+                lucide.createIcons();
+            }, [gameState]);
+
+            useEffect(() => { lucide.createIcons(); });
+
+            const makeMove = (from, to, prom = false) => {
+                const nb = board.map(row=>[...row]);
+                const nh = hands.map(h=>({...h}));
+                let p;
+                if(from.hand) { p = {type: from.hand, owner: turn}; nh[turn][from.hand]--; }
+                else {
+                    p = {...nb[from.r][from.c]}; nb[from.r][from.c] = null;
+                    if(prom) p.type = PROMOTIONS[p.type];
+                    const target = nb[to.r][to.c];
+                    if(target) {
+                        if(target.type==='OU') setGameOver(turn===SENTE ? "先手の勝利" : "後手の勝利");
+                        let base = target.type;
+                        for(let k in PROMOTIONS) if(PROMOTIONS[k]===target.type) base = k;
+                        nh[turn][base]++;
+                    }
+                }
+                nb[to.r][to.c] = p;
+                setBoard(nb); setHands(nh); setSelected(null); setTurn(1-turn);
+            };
+
+            const handleSquare = (r, c) => {
+                if(gameState!=='playing') return;
+                if(selected) {
+                    const ms = selected.hand ? getHandMoves(board, selected.hand, turn) : getValidMoves(board, selected.r, selected.c);
+                    if(ms.some(m=>m.r===r && m.c===c)) {
+                        const inZ = (turn===SENTE ? (r<=2||selected.r<=2) : (r>=6||selected.r>=6));
+                        if(!selected.hand && PROMOTIONS[board[selected.r][selected.c].type] && inZ) {
+                            setPromotion({from:selected, to:{r,c}, type:board[selected.r][selected.c].type});
+                            return;
+                        }
+                        makeMove(selected, {r,c}); return;
+                    }
+                }
+                if(board[r][c]?.owner===turn) setSelected({r,c}); else setSelected(null);
+            };
+
+            if(gameState!=='playing') {
+                return (
+                    <div className="flex flex-col items-center justify-center min-h-screen p-4">
+                        <div className="bg-white p-10 rounded-3xl shadow-2xl text-center max-w-sm w-full border-t-8 border-amber-600">
+                            <h2 className="text-3xl font-black mb-6">振り駒</h2>
+                            <div className="flex justify-center gap-2 mb-8">
+                                {results.map((f, i)=>(
+                                    <div key={i} className={`w-10 h-12 bg-amber-100 border border-amber-600 flex items-center justify-center font-bold rounded ${gameState==='deciding'?'animate-bounce':''}`}>
+                                        {f ? '歩' : 'と'}
+                                    </div>
+                                ))}
+                            </div>
+                            {gameState==='ready' && (
+                                <button onClick={()=>{setGameState('playing'); if(results.filter(x=>x).length < 3) setIsFlipped(true);}} className="w-full bg-stone-800 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2">
+                                    対局開始 <i data-lucide="play"></i>
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="flex flex-col items-center justify-center min-h-screen p-2 md:p-6">
+                    <div className="max-w-5xl w-full bg-[#f0e4d0] border-4 border-[#8b5a2b] rounded-xl shadow-2xl overflow-hidden flex flex-col md:flex-row">
+                        {/* Gote Area */}
+                        <div className={`p-4 w-full md:w-52 flex flex-col items-center border-b md:border-b-0 md:border-r border-[#8b5a2b] ${turn===GOTE?'bg-amber-100':'opacity-60'}`}>
+                            <div className="mb-4 text-center">
+                                <div className="w-12 h-12 bg-stone-800 rounded-full flex items-center justify-center text-white mx-auto"><i data-lucide="user" className="rotate-180"></i></div>
+                                <p className="font-bold">後手</p>
+                            </div>
+                            <div className="grid grid-cols-4 md:grid-cols-2 gap-2">
+                                {Object.entries(hands[GOTE]).map(([t, c]) => (
+                                    <button key={t} onClick={()=>setSelected({hand:t})} disabled={turn!==GOTE||c===0} className={`w-10 h-10 border rounded flex items-center justify-center font-bold ${selected?.hand===t?'bg-amber-400':'bg-amber-200'} ${c===0?'opacity-20':''}`}>
+                                        <span className="rotate-180">{PIECE_DISPLAY[t].name}</span>
+                                        {c>1 && <span className="absolute text-[8px] bg-red-600 text-white rounded-full w-4 h-4 -mt-6 -ml-6 flex items-center justify-center">{c}</span>}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Board */}
+                        <div className="flex-1 p-4 bg-[#e6d5b8] flex flex-col items-center relative">
+                            <div className="mb-4 flex gap-2">
+                                <button onClick={()=>setIsFlipped(!isFlipped)} className="px-3 py-1 bg-stone-800 text-white rounded-full text-xs font-bold">回転</button>
+                                <button onClick={()=>location.reload()} className="px-3 py-1 bg-stone-300 rounded-full text-xs font-bold">リセット</button>
+                            </div>
+                            <div className={`transition-transform duration-500 ${isFlipped?'rotate-180':''}`}>
+                                <div className="bg-[#dcb35c] p-2 border-4 border-[#8b5a2b] grid grid-cols-9 bg-stone-900 gap-px">
+                                    {board.map((row, r) => row.map((p, c) => (
+                                        <div key={`${r}-${c}`} onClick={()=>handleSquare(r,c)} className={`w-9 h-10 sm:w-12 sm:h-14 flex items-center justify-center relative ${selected?.r===r&&selected?.c===c?'bg-amber-300':'bg-[#f3d49c]'}`}>
+                                            {p && <ShogiPiece type={p.type} owner={p.owner} isSelected={selected?.r===r&&selected?.c===c} />}
+                                        </div>
+                                    )))}
+                                </div>
+                            </div>
+                            {promotion && (
+                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
+                                    <div className="bg-white p-6 rounded-xl text-center">
+                                        <p className="font-bold mb-4">成りますか？</p>
+                                        <div className="flex gap-4">
+                                            <button onClick={()=>{makeMove(promotion.from, promotion.to, true); setPromotion(null);}} className="px-4 py-2 bg-red-600 text-white rounded">成る</button>
+                                            <button onClick={()=>{makeMove(promotion.from, promotion.to, false); setPromotion(null);}} className="px-4 py-2 bg-stone-400 text-white rounded">成らず</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            {gameOver && (
+                                <div className="absolute inset-0 bg-stone-900/90 flex flex-col items-center justify-center z-50 text-white">
+                                    <h2 className="text-4xl font-bold mb-4">終局</h2>
+                                    <p className="text-2xl mb-6">{gameOver}</p>
+                                    <button onClick={()=>location.reload()} className="px-6 py-2 bg-white text-stone-900 rounded-full font-bold">再戦</button>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Sente Area */}
+                        <div className={`p-4 w-full md:w-52 flex flex-col items-center border-t md:border-t-0 md:border-l border-[#8b5a2b] ${turn===SENTE?'bg-amber-100':'opacity-60'}`}>
+                            <div className="mb-4 text-center">
+                                <div className="w-12 h-12 bg-stone-800 rounded-full flex items-center justify-center text-white mx-auto"><i data-lucide="user"></i></div>
+                                <p className="font-bold">先手</p>
+                            </div>
+                            <div className="grid grid-cols-4 md:grid-cols-2 gap-2">
+                                {Object.entries(hands[SENTE]).map(([t, c]) => (
+                                    <button key={t} onClick={()=>setSelected({hand:t})} disabled={turn!==SENTE||c===0} className={`w-10 h-10 border rounded flex items-center justify-center font-bold ${selected?.hand===t?'bg-amber-400':'bg-amber-200'} ${c===0?'opacity-20':''}`}>
+                                        <span>{PIECE_DISPLAY[t].name}</span>
+                                        {c>1 && <span className="absolute text-[8px] bg-red-600 text-white rounded-full w-4 h-4 -mt-6 -ml-6 flex items-center justify-center">{c}</span>}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
